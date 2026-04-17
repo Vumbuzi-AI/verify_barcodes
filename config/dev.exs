@@ -20,7 +20,6 @@ config :verify_barcodes, VerifyBarcodes.Repo,
 config :verify_barcodes, VerifyBarcodesWeb.Endpoint,
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
   http: [port: 6150],
-  url: [host: "localhost", port: 6150, scheme: "http"],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
