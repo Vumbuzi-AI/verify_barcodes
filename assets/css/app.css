@@ -9,6 +9,7 @@
 @layer base {
   html {
     font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+    background-color: #f8fafc;
   }
 
   body {
@@ -16,8 +17,7 @@
     background-color: #f7fbff;
     background-image:
       radial-gradient(circle at top left, rgba(0, 87, 184, 0.08), transparent 28%),
-      radial-gradient(circle at top right, rgba(245, 130, 32, 0.07), transparent 24%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(247, 251, 255, 1));
+      radial-gradient(circle at top right, rgba(245, 130, 32, 0.08), transparent 22%);
     @apply antialiased;
   }
 
