@@ -14,9 +14,9 @@ defmodule VerifyBarcodes.OpenAI.VisionStub do
     "Defects"
   ]
 
-  def analyse_image(_base64_image, media_type, _prompt, _opts \\ []) do
+  def analyse_image(_base64_image, media_type, prompt, _opts \\ []) do
     if pid = Application.get_env(:verify_barcodes, :vision_test_pid) do
-      send(pid, {:vision_called, media_type})
+      send(pid, {:vision_called, media_type, prompt})
     end
 
     if response = Application.get_env(:verify_barcodes, :vision_test_response) do
