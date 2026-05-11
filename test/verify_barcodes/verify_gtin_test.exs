@@ -8,6 +8,7 @@ defmodule VerifyBarcodes.VerifyGtinTest do
     previous_client = Application.get_env(:verify_barcodes, :gtin_http_client)
     previous_test_pid = Application.get_env(:verify_barcodes, :gtin_http_test_pid)
     previous_responses = Application.get_env(:verify_barcodes, :gtin_http_test_responses)
+    previous_kenya_url = Application.get_env(:verify_barcodes, :gs1_kenya_getbarcode_url)
 
     Application.put_env(:verify_barcodes, :gtin_http_client, VerifyBarcodes.GtinHttpClientStub)
     Application.put_env(:verify_barcodes, :gtin_http_test_pid, self())
@@ -16,6 +17,7 @@ defmodule VerifyBarcodes.VerifyGtinTest do
       restore_env(:gtin_http_client, previous_client)
       restore_env(:gtin_http_test_pid, previous_test_pid)
       restore_env(:gtin_http_test_responses, previous_responses)
+      restore_env(:gs1_kenya_getbarcode_url, previous_kenya_url)
     end)
 
     :ok
@@ -192,6 +194,74 @@ defmodule VerifyBarcodes.VerifyGtinTest do
     assert product.net_content == "30 Tablet"
     assert product.unit_of_measure == "Tablet"
     assert product.target_market == "404"
+  end
+
+  test "uses the configured local GS1 Kenya barcode endpoint" do
+    local_url = "http://localhost:4001/activate/getbarcode"
+
+    Application.put_env(:verify_barcodes, :gs1_kenya_getbarcode_url, local_url)
+
+    Application.put_env(
+      :verify_barcodes,
+      :gtin_http_test_responses,
+      fn
+        @verified_by_gs1_url, _options ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        ^local_url, options ->
+          assert options[:json] == %{"id" => %{"barcode" => "6161101890151"}}
+
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "weight" => "1",
+               "uom" => "H87",
+               "target" => "001",
+               "name" => "Cosy",
+               "company" => "KIM-FAY EAST AFRICA LIMITED"
+             }
+           }}
+      end
+    )
+
+    assert {:ok, product} = VerifyBarcodes.VerifyGtin.verify("06161101890151")
+
+    assert product.source_label == "GS1 Kenya"
+    assert_received {:gtin_http_called, ^local_url, _options}
+  end
+
+  test "decodes string JSON bodies returned by GS1 Kenya" do
+    Application.put_env(
+      :verify_barcodes,
+      :gtin_http_test_responses,
+      fn
+        @verified_by_gs1_url, _options ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        @gs1_kenya_url, options ->
+          assert options[:json] == %{"id" => %{"barcode" => "6161101890496"}}
+
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body:
+               ~s({"weight":"1","uom":"H87","target":"001","package":null,"name":"Fay","image":"https://gs1kenya.org/uploads/","description":" Fay 10 extra sheets","company":"KIM-FAY EAST AFRICA LIMITED","classify":"Beauty/Personal Care/Hygiene Variety Packs"})
+           }}
+      end
+    )
+
+    assert {:ok, product} = VerifyBarcodes.VerifyGtin.verify("6161101890496")
+
+    assert product.source_label == "GS1 Kenya"
+    assert product.gtin == "6161101890496"
+    assert product.name == "Fay"
+    assert product.description == "Fay 10 extra sheets"
+    assert product.net_content == "1 Piece"
+    assert product.target_market == "Global"
+    assert product.unit_of_measure == "Piece"
+    assert product.category == "Beauty/Personal Care/Hygiene Variety Packs"
+    assert product.licensee == "KIM-FAY EAST AFRICA LIMITED"
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:verify_barcodes, key)

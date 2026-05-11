@@ -413,7 +413,6 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
       %{label: "GTIN", value: product[:gtin] || detected_gtin, kind: :text},
       %{label: "Product name", value: product[:name] || product[:brand], kind: :text},
       %{label: "Product description", value: product[:description], kind: :text},
-      %{label: "Product image URL", value: product[:image_url], kind: :link},
       %{label: "Product category", value: product[:category], kind: :text},
       %{label: "Net content", value: product[:net_content], kind: :text},
       %{
@@ -756,7 +755,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                   <div class="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-gs1-blue">
                   </div>
                   <div class="text-sm font-medium text-slate-700">
-                    Looking up GTIN in the GS1 registry…
+                    Looking up GTIN across GS1 registries…
                   </div>
                 </div>
               </div>
@@ -867,11 +866,11 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
             <%= if @gtin_status == :not_verified do %>
               <div class="rounded-3xl border border-gs1-orange/25 bg-white p-5 shadow-sm">
                 <div class="text-sm font-medium uppercase tracking-[0.16em] text-gs1-orange-dark">
-                  Not in GS1 Registry
+                  Not Found In Registries
                 </div>
                 <p class="mt-2 text-sm leading-6 text-slate-700">
                   GTIN <span class="font-mono">{@detected_gtin}</span>
-                  is a valid number but was not found in the GS1 verified registry.
+                  is a valid number, but it was not found in Verified by GS1 or the GS1 Kenya barcode lookup.
                 </p>
               </div>
             <% end %>

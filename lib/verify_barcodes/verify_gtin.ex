@@ -1,22 +1,45 @@
 defmodule VerifyBarcodes.VerifyGtin do
+  require Logger
+
   @verified_by_gs1_url "https://grp.gs1.org/grp/v3.2/gtins/verified"
-  @gs1_kenya_url "https://gs1kenya.org/activate/getbarcode"
+  @default_gs1_kenya_url "https://gs1kenya.org/activate/getbarcode"
 
   defmodule ReqClient do
     def post(url, options), do: Req.post(url, options)
   end
 
   def verify(gtin) when is_binary(gtin) do
+    Logger.info("Starting GTIN registry lookup for #{gtin}")
+
     case lookup_verified_by_gs1(gtin) do
-      {:ok, :not_verified} -> lookup_gs1_kenya(gtin)
-      {:ok, product} -> {:ok, product}
-      {:error, _reason} -> lookup_gs1_kenya(gtin)
+      {:ok, :not_verified} ->
+        Logger.info(
+          "Verified by GS1 did not return usable product data for #{gtin}; trying GS1 Kenya"
+        )
+
+        lookup_gs1_kenya(gtin)
+
+      {:ok, product} ->
+        Logger.info(
+          "GTIN #{gtin} matched product data from #{product[:source_label] || "registry"}"
+        )
+
+        {:ok, product}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Verified by GS1 lookup failed for #{gtin}: #{inspect(reason)}; trying GS1 Kenya"
+        )
+
+        lookup_gs1_kenya(gtin)
     end
   rescue
-    _error ->
+    error ->
+      Logger.error("GTIN lookup crashed for #{gtin}: #{Exception.message(error)}")
       {:ok, :not_verified}
   catch
-    _kind, _reason ->
+    kind, reason ->
+      Logger.error("GTIN lookup threw #{inspect(kind)} for #{gtin}: #{inspect(reason)}")
       {:ok, :not_verified}
   end
 
@@ -37,34 +60,50 @@ defmodule VerifyBarcodes.VerifyGtin do
       receive_timeout: 60_000
     ]
 
+    Logger.debug("Posting GTIN #{gtin} to Verified by GS1")
+
     case http_client().post(@verified_by_gs1_url, req_options) do
       {:ok, %Req.Response{status: 200, body: body}} when is_list(body) ->
+        Logger.debug("Verified by GS1 returned 200 for #{gtin} with #{length(body)} result(s)")
+
         case Enum.at(body, 0) do
           nil ->
+            Logger.info("Verified by GS1 returned no records for #{gtin}")
             {:ok, :not_verified}
 
           product ->
             product = normalize_verified_by_gs1_product(product, gtin)
 
             if meaningful_product_data?(product) do
+              Logger.info("Verified by GS1 returned usable product data for #{gtin}")
               {:ok, product}
             else
+              Logger.info("Verified by GS1 returned only sparse product data for #{gtin}")
               {:ok, :not_verified}
             end
         end
 
       {:ok, %Req.Response{status: status}} when status in 400..599 ->
+        Logger.warning("Verified by GS1 returned HTTP #{status} for #{gtin}")
         {:ok, :not_verified}
 
       {:error, reason} ->
+        Logger.warning("Verified by GS1 request errored for #{gtin}: #{inspect(reason)}")
         {:error, reason}
 
       _ ->
+        Logger.warning("Verified by GS1 returned an unexpected response for #{gtin}")
         {:ok, :not_verified}
     end
   end
 
   defp lookup_gs1_kenya(gtin) do
+    candidates = gs1_kenya_candidates(gtin)
+
+    Logger.info(
+      "Trying GS1 Kenya lookup for #{gtin} with candidate(s): #{Enum.join(candidates, ", ")}"
+    )
+
     gtin
     |> gs1_kenya_candidates()
     |> Enum.reduce_while({:ok, :not_verified}, fn candidate, _acc ->
@@ -89,20 +128,54 @@ defmodule VerifyBarcodes.VerifyGtin do
       receive_timeout: 60_000
     ]
 
-    case http_client().post(@gs1_kenya_url, req_options) do
-      {:ok, %Req.Response{status: 200, body: body}} when is_map(body) ->
-        case normalize_gs1_kenya_product(body, original_gtin) do
-          nil -> {:ok, :not_verified}
-          product -> {:ok, product}
+    Logger.debug(
+      "Posting barcode candidate #{candidate} to GS1 Kenya for original GTIN #{original_gtin}"
+    )
+
+    case http_client().post(gs1_kenya_url(), req_options) do
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        Logger.debug("GS1 Kenya returned 200 for candidate #{candidate}")
+
+        case decode_gs1_kenya_body(body) do
+          {:ok, decoded_body} ->
+            Logger.debug(
+              "GS1 Kenya decoded response keys for candidate #{candidate}: #{inspect(Map.keys(decoded_body))}"
+            )
+
+            case normalize_gs1_kenya_product(decoded_body, original_gtin) do
+              nil ->
+                Logger.info(
+                  "GS1 Kenya returned no usable product data for candidate #{candidate}"
+                )
+
+                {:ok, :not_verified}
+
+              product ->
+                Logger.info(
+                  "GS1 Kenya returned product data for original GTIN #{original_gtin} using candidate #{candidate}"
+                )
+
+                {:ok, product}
+            end
+
+          {:error, reason} ->
+            Logger.warning(
+              "GS1 Kenya returned a 200 response but the body could not be decoded for candidate #{candidate}: #{inspect(reason)}"
+            )
+
+            {:ok, :not_verified}
         end
 
       {:ok, %Req.Response{status: status}} when status in 400..599 ->
+        Logger.warning("GS1 Kenya returned HTTP #{status} for candidate #{candidate}")
         {:ok, :not_verified}
 
       {:error, _reason} ->
+        Logger.warning("GS1 Kenya request errored for candidate #{candidate}")
         {:ok, :not_verified}
 
       _ ->
+        Logger.warning("GS1 Kenya returned an unexpected response for candidate #{candidate}")
         {:ok, :not_verified}
     end
   end
@@ -156,6 +229,18 @@ defmodule VerifyBarcodes.VerifyGtin do
       normalized
     end
   end
+
+  defp decode_gs1_kenya_body(body) when is_map(body), do: {:ok, body}
+
+  defp decode_gs1_kenya_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+      {:ok, decoded} -> {:error, {:unexpected_json_shape, decoded}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp decode_gs1_kenya_body(body), do: {:error, {:unexpected_body_type, body}}
 
   defp extract_value([first | _]) when is_map(first), do: extract_string(Map.get(first, "value"))
   defp extract_value(_), do: nil
@@ -241,5 +326,9 @@ defmodule VerifyBarcodes.VerifyGtin do
 
   defp http_client do
     Application.get_env(:verify_barcodes, :gtin_http_client, ReqClient)
+  end
+
+  defp gs1_kenya_url do
+    Application.get_env(:verify_barcodes, :gs1_kenya_getbarcode_url, @default_gs1_kenya_url)
   end
 end
