@@ -955,30 +955,6 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
               </div>
             <% end %>
 
-            <div class={"rounded-3xl border p-6 shadow-sm #{verdict_class(@result["overall_verdict"])}"}>
-              <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <div class="text-sm font-medium uppercase tracking-[0.16em] opacity-70">
-                    Overall Verdict
-                  </div>
-                  <div class="mt-2 text-3xl font-semibold tracking-[-0.03em]">
-                    {display_status(@result["overall_verdict"])}
-                  </div>
-                  <p class="mt-3 max-w-2xl text-sm leading-6 opacity-90">
-                    {@result["summary"]}
-                  </p>
-                </div>
-                <div class="rounded-2xl border border-current/10 bg-white/60 px-4 py-3">
-                  <div class="text-xs font-medium uppercase tracking-[0.16em] opacity-70">
-                    Score
-                  </div>
-                  <div class="mt-1 text-3xl font-semibold tracking-[-0.03em]">
-                    {@result["overall_score"]}<span class="text-base font-medium opacity-70">/100</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <div class="grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
               <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div class="text-sm font-medium text-gs1-blue">
