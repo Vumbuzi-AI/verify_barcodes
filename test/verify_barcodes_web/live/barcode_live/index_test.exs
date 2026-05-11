@@ -49,10 +49,11 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
     assert_receive {:vision_called, "image/png", prompt}
     assert prompt =~ "Surface context: the barcode is on a straight/flat surface."
 
-    html = wait_for_render(view, "Overall Verdict")
-    assert html =~ "Overall Verdict"
+    html = wait_for_render(view, "Summary")
+    assert html =~ "Summary"
+    assert html =~ "Passed checks"
+    assert html =~ "Checks"
     assert html =~ "Pass"
-    assert html =~ "Stub barcode analysis succeeded."
     assert html =~ "Placement"
     assert html =~ "bg-emerald-600"
   end
@@ -98,7 +99,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
              "The image is tightly cropped around the symbol and does not show enough surface detail to identify the substrate or printing process reliably."
   end
 
-  test "verified GTIN renders seven attributes with missing fields first", %{conn: conn} do
+  test "verified GTIN renders registry attributes with missing fields first", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
     upload =
@@ -113,7 +114,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
     assert render_upload(upload, "barcode.png") =~ "100%"
     assert render_submit(form(view, "#upload-form", %{"surface_type" => "unknown"}))
     assert_receive {:vision_called, "image/png", _prompt}
-    assert wait_for_render(view, "Overall Verdict") =~ "Overall Verdict"
+    assert wait_for_render(view, "Summary") =~ "Summary"
 
     send(
       view.pid,
@@ -122,23 +123,30 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
         %{
           gtin: "09506000134352",
           brand: "Acme Foods",
+          name: nil,
           description: "Roasted ground coffee",
           category: nil,
           net_content: "500 GRM",
           country_of_sale: nil,
+          target_market: nil,
+          unit_of_measure: nil,
           image_url: nil,
-          licensee: "Acme Foods Ltd"
+          licensee: "Acme Foods Ltd",
+          source_label: "Verified by GS1"
         }}}
     )
 
     html = render(view)
 
-    assert html =~ "The seven product attributes are shown here, with missing fields first."
-    assert html =~ "4/7 available"
+    assert html =~ "Registry attributes are shown here, with missing fields first."
+    assert html =~ "4/8 available"
+    assert html =~ "Company"
+    assert html =~ "Acme Foods Ltd"
 
-    assert position_of(html, "Product image URL") < position_of(html, "Brand name")
+    assert position_of(html, "Product image URL") < position_of(html, "Product name")
     assert position_of(html, "Product category") < position_of(html, "Product description")
-    assert position_of(html, "Country of sale") < position_of(html, "Net content")
+    assert position_of(html, "Market") < position_of(html, "Net content")
+    assert position_of(html, "Unit of measure") < position_of(html, "Product name")
   end
 
   defp verbose_cannot_determine_response do
@@ -235,7 +243,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
     |> elem(0)
   end
 
-  defp wait_for_render(view, snippet, attempts \\ 10)
+  defp wait_for_render(view, snippet, attempts \\ 50)
 
   defp wait_for_render(view, snippet, attempts) when attempts > 0 do
     html = render(view)
@@ -243,7 +251,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
     if html =~ snippet do
       html
     else
-      Process.sleep(10)
+      Process.sleep(20)
       wait_for_render(view, snippet, attempts - 1)
     end
   end

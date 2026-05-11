@@ -3,6 +3,6 @@ defmodule VerifyBarcodesWeb.PageControllerTest do
 
   test "GET /", %{conn: conn} do
     conn = get(conn, ~p"/")
-    assert html_response(conn, 200) =~ "AI Barcode Verification"
+    assert html_response(conn, 200) =~ "GS1 Kenya Barcode Verifier"
   end
 end

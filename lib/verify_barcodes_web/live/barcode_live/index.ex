@@ -171,14 +171,12 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
           message =
             case VerifyBarcodes.Gtin.validate(digits) do
               {:ok, gtin} ->
-                padded = VerifyBarcodes.Gtin.pad_to_14(gtin)
-
-                case VerifyBarcodes.VerifyGtin.verify(padded) do
+                case VerifyBarcodes.VerifyGtin.verify(gtin) do
                   {:ok, :not_verified} ->
                     {:gtin_verify_complete, {:not_verified, gtin}}
 
-                  {:ok, body} when is_list(body) and body != [] ->
-                    {:gtin_verify_complete, {:verified, gtin, extract_product(body)}}
+                  {:ok, product} when is_map(product) ->
+                    {:gtin_verify_complete, {:verified, gtin, product}}
 
                   _ ->
                     {:gtin_verify_complete, {:not_verified, gtin}}
@@ -227,61 +225,6 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
 
     Enum.join([@user_prompt, surface_context], " ")
   end
-
-  defp extract_product(body) do
-    first = Enum.at(body, 0) || %{}
-
-    %{
-      gtin: extract_string(first["gtin"]),
-      brand: extract_value(first["brandName"]),
-      description: extract_value(first["productDescription"]),
-      category: extract_string(first["gpcCategoryCode"]),
-      net_content: extract_net_content(first["netContent"]),
-      country_of_sale: extract_country(first["countryOfSaleCode"]),
-      image_url: extract_value(first["productImageUrl"]),
-      licensee: extract_manufacturer(first["gs1Licence"])
-    }
-  end
-
-  defp extract_value([first | _]) when is_map(first), do: Map.get(first, "value")
-  defp extract_value(_), do: nil
-
-  defp extract_string(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> case do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp extract_string(_), do: nil
-
-  defp extract_net_content([first | _]) when is_map(first) do
-    [Map.get(first, "value"), Map.get(first, "unitCode")]
-    |> Enum.filter(&(not blank_value?(&1)))
-    |> Enum.join(" ")
-    |> extract_string()
-  end
-
-  defp extract_net_content(_), do: nil
-
-  defp extract_country([first | _]) when is_map(first) do
-    [Map.get(first, "alpha3"), Map.get(first, "alpha2"), Map.get(first, "numeric")]
-    |> Enum.filter(&(not blank_value?(&1)))
-    |> case do
-      [alpha3, alpha2 | _] -> "#{alpha3} (#{alpha2})"
-      [country | _] -> country
-      _ -> nil
-    end
-  end
-
-  defp extract_country(_), do: nil
-
-  defp extract_manufacturer(%{"licenseeName" => name}) when is_binary(name) and name != "",
-    do: name
-
-  defp extract_manufacturer(_), do: nil
 
   defp parse_ai_response(raw_text) do
     raw_text
@@ -468,12 +411,17 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
 
     [
       %{label: "GTIN", value: product[:gtin] || detected_gtin, kind: :text},
-      %{label: "Brand name", value: product[:brand], kind: :text},
+      %{label: "Product name", value: product[:name] || product[:brand], kind: :text},
       %{label: "Product description", value: product[:description], kind: :text},
       %{label: "Product image URL", value: product[:image_url], kind: :link},
       %{label: "Product category", value: product[:category], kind: :text},
       %{label: "Net content", value: product[:net_content], kind: :text},
-      %{label: "Country of sale", value: product[:country_of_sale], kind: :text}
+      %{
+        label: "Market",
+        value: product[:target_market] || product[:country_of_sale],
+        kind: :text
+      },
+      %{label: "Unit of measure", value: product[:unit_of_measure], kind: :text}
     ]
     |> Enum.with_index()
     |> Enum.map(fn {attribute, index} ->
@@ -819,13 +767,13 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-[0.2em] text-gs1-blue">
-                      Verified by GS1
+                      {@product[:source_label] || "Registry match"}
                     </div>
                     <h2 class="mt-2 text-2xl font-semibold tracking-[-0.03em] text-gs1-ink">
                       GTIN match
                     </h2>
                     <p class="mt-2 text-sm leading-6 text-slate-600">
-                      The seven product attributes are shown here, with missing fields first.
+                      Registry attributes are shown here, with missing fields first.
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
@@ -833,7 +781,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                       Verified
                     </span>
                     <span class="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                      {available_attribute_count(gtin_attributes)}/7 available
+                      {available_attribute_count(gtin_attributes)}/{length(gtin_attributes)} available
                     </span>
                   </div>
                 </div>
@@ -855,7 +803,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                     <%= if @product.licensee do %>
                       <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <div class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          Licensee
+                          Company
                         </div>
                         <div class="mt-1 text-sm font-medium text-gs1-ink">{@product.licensee}</div>
                       </div>
@@ -891,7 +839,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                             <%= cond do %>
                               <% attribute.missing -> %>
                                 <span class="text-slate-500">
-                                  No value available from Verified by GS1.
+                                  No value available from the selected registry source.
                                 </span>
                               <% attribute.kind == :link -> %>
                                 <a
