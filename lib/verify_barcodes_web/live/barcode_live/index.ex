@@ -1,7 +1,14 @@
 defmodule VerifyBarcodesWeb.BarcodeLive.Index do
   use VerifyBarcodesWeb, :live_view
+  require Logger
 
-  @user_prompt "Analyse the uploaded barcode image and return your structured verdict as JSON only."
+  @user_prompt """
+  Analyse this single barcode photo as a GS1 preflight inspection.
+  Prioritise scan-readiness, symbology identification, HRI legibility, quiet zones, truncation, and visible print defects.
+  Use the supplied surface context when judging placement orientation.
+  If the image is cropped, reflective, blurred, angled, or partially hidden, name that exact limitation in the affected findings.
+  Return the required structured verdict only.
+  """
 
   @impl true
   def mount(_params, _session, socket) do
@@ -26,7 +33,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
      |> allow_upload(:barcode_image,
        accept: ~w(.jpg .jpeg .png .webp),
        max_entries: 1,
-       max_file_size: 5_000_000
+       max_file_size: 20_000_000
      )}
   end
 
@@ -64,6 +71,10 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
             parent = self()
             vision_module = vision_module()
             prompt = analysis_prompt(surface_type)
+
+            Logger.info(
+              "Starting barcode analysis media_type=#{media_type} bytes=#{byte_size(binary)} surface_type=#{surface_type}"
+            )
 
             Task.start(fn ->
               result = vision_module.analyse_image(base64, media_type, prompt)
@@ -106,8 +117,14 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
 
   @impl true
   def handle_info({:analysis_complete, {:ok, raw_text}}, socket) do
+    Logger.debug("Barcode analysis response received #{payload_summary(raw_text)}")
+
     case parse_ai_response(raw_text) do
       {:ok, result} ->
+        Logger.info(
+          "Barcode analysis parsed successfully verdict=#{result["overall_verdict"]} checks=#{length(result["checks"] || [])}"
+        )
+
         {:noreply,
          socket
          |> assign(:status, :complete)
@@ -145,6 +162,8 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
   end
 
   def handle_info({:analysis_complete, {:error, reason}}, socket) do
+    Logger.warning("Barcode analysis request failed reason=#{inspect(reason)}")
+
     message =
       case reason do
         :missing_openai_api_key -> "OpenAI API key is not configured."
@@ -227,24 +246,47 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
   end
 
   defp parse_ai_response(raw_text) do
-    raw_text
-    |> String.trim()
-    |> strip_markdown_fences()
-    |> Jason.decode()
-    |> case do
+    case decode_ai_payload(raw_text) do
       {:ok,
        %{"overall_verdict" => _, "overall_score" => _, "summary" => _, "checks" => checks} =
            result}
       when is_list(checks) ->
         {:ok, normalize_result(result)}
 
-      {:ok, _unexpected} ->
+      {:ok, unexpected} ->
+        Logger.warning(
+          "AI response had unexpected structure keys=#{inspect(Map.keys(unexpected))} #{payload_summary(raw_text)}"
+        )
+
         {:error, "Unexpected response structure from AI."}
 
-      {:error, _} ->
+      {:error, reason} ->
+        log_ai_parse_failure(raw_text, reason)
         {:error, "The AI returned a non-JSON response."}
     end
   end
+
+  defp decode_ai_payload(raw_text) when is_binary(raw_text) do
+    cleaned =
+      raw_text
+      |> String.trim()
+      |> strip_markdown_fences()
+
+    with {:error, _} <- Jason.decode(cleaned),
+         {:ok, extracted} <- extract_json_object(cleaned),
+         {:ok, decoded} <- Jason.decode(extracted) do
+      decode_nested_json(decoded)
+    else
+      {:ok, decoded} -> decode_nested_json(decoded)
+      error -> error
+    end
+  end
+
+  defp decode_ai_payload(payload) when is_map(payload), do: {:ok, payload}
+  defp decode_ai_payload(_payload), do: {:error, :invalid_payload}
+
+  defp decode_nested_json(decoded) when is_binary(decoded), do: decode_ai_payload(decoded)
+  defp decode_nested_json(decoded), do: {:ok, decoded}
 
   defp strip_markdown_fences(text) do
     text
@@ -252,6 +294,79 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
     |> String.replace(~r/\s*```$/, "")
     |> String.trim()
   end
+
+  defp extract_json_object(text) when is_binary(text) do
+    start_index =
+      case :binary.match(text, "{") do
+        {position, _length} -> position
+        :nomatch -> nil
+      end
+
+    end_index =
+      text
+      |> :binary.matches("}")
+      |> List.last()
+      |> case do
+        {position, _length} -> position
+        nil -> nil
+      end
+
+    case {start_index, end_index} do
+      {nil, _} ->
+        {:error, :no_json_object}
+
+      {_, nil} ->
+        {:error, :no_json_object}
+
+      {start_pos, end_pos} when end_pos > start_pos ->
+        json_length = end_pos - start_pos + 1
+        {:ok, String.slice(text, start_pos, json_length)}
+
+      _ ->
+        {:error, :no_json_object}
+    end
+  end
+
+  defp log_ai_parse_failure(raw_text, reason) do
+    cleaned =
+      raw_text
+      |> to_string()
+      |> String.trim()
+      |> strip_markdown_fences()
+
+    extracted_preview =
+      case extract_json_object(cleaned) do
+        {:ok, json} -> preview_text(json)
+        {:error, extract_reason} -> "[none: #{inspect(extract_reason)}]"
+      end
+
+    Logger.warning(
+      "AI response JSON parse failed reason=#{inspect(reason)} raw_preview=#{inspect(preview_text(raw_text))} cleaned_preview=#{inspect(preview_text(cleaned))} extracted_preview=#{inspect(extracted_preview)}"
+    )
+  end
+
+  defp payload_summary(payload) when is_binary(payload) do
+    "length=#{byte_size(payload)} preview=#{inspect(preview_text(payload))}"
+  end
+
+  defp payload_summary(payload) when is_map(payload) do
+    "map_keys=#{inspect(Map.keys(payload))}"
+  end
+
+  defp payload_summary(payload) do
+    "payload_type=#{inspect(payload.__struct__ || payload)}"
+  rescue
+    _ -> "payload_type=#{inspect(payload)}"
+  end
+
+  defp preview_text(text) when is_binary(text) do
+    text
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> String.slice(0, 400)
+  end
+
+  defp preview_text(other), do: inspect(other)
 
   defp normalize_result(%{"checks" => checks} = result) do
     Map.put(result, "checks", Enum.map(checks, &normalize_check/1))
@@ -395,6 +510,7 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
     checks
     |> List.wrap()
     |> Enum.reject(&(&1["criterion"] == "Barcode Dimensions"))
+    |> Enum.reject(&(&1["status"] == "CANNOT_DETERMINE"))
     |> Enum.with_index()
     |> Enum.sort_by(fn {check, index} -> {status_rank(check["status"]), index} end)
     |> Enum.map(&elem(&1, 0))
@@ -823,15 +939,6 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                             <div class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                               {attribute.label}
                             </div>
-                            <span class={[
-                              "inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]",
-                              if(attribute.missing,
-                                do: "bg-white text-gs1-orange-dark",
-                                else: "bg-white text-slate-500"
-                              )
-                            ]}>
-                              {if attribute.missing, do: "Missing", else: "Available"}
-                            </span>
                           </div>
 
                           <div class="mt-3 text-sm leading-6 text-gs1-ink">
@@ -935,12 +1042,6 @@ defmodule VerifyBarcodesWeb.BarcodeLive.Index do
                     <dt class="text-sm text-slate-600">Failed checks</dt>
                     <dd class="mt-2 text-2xl font-semibold tracking-[-0.03em] text-gs1-orange-dark">
                       {count_status(checks, "FAIL")}
-                    </dd>
-                  </div>
-                  <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                    <dt class="text-sm text-slate-600">Could not determine</dt>
-                    <dd class="mt-2 text-2xl font-semibold tracking-[-0.03em] text-gs1-ink">
-                      {count_status(checks, "CANNOT_DETERMINE")}
                     </dd>
                   </div>
                 </dl>

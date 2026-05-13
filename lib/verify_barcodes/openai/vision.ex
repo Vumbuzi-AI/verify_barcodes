@@ -5,7 +5,7 @@ defmodule VerifyBarcodes.OpenAI.Vision do
   require Logger
 
   @api_url "https://api.openai.com/v1/chat/completions"
-  @default_model "gpt-5.4"
+  @default_model "gpt-5.5"
   @analysis_context """
   You are a barcode quality expert with deep knowledge of GS1 standards and ISO/IEC 15416/15415.
   You will be given an image of a barcode to evaluate.
@@ -110,8 +110,7 @@ defmodule VerifyBarcodes.OpenAI.Vision do
               %{"type" => "text", "text" => prompt}
             ]
           }
-        ],
-        "temperature" => 0.1
+        ]
       }
       |> put_completion_limit(model, max_tokens)
 

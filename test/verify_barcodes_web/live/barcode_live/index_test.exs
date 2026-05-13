@@ -85,12 +85,14 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
 
     refute html =~ "Barcode Dimensions"
     refute html =~ "No scale reference is visible, so exact dimensions cannot be verified."
-    assert html =~ "Surface detail is too limited to identify the substrate or print process."
-    assert html =~ "Cannot determine"
+    refute html =~ "Surface detail is too limited to identify the substrate or print process."
+    refute html =~ "Cannot determine"
+    refute html =~ "Could not determine"
+    refute html =~ "Spread"
+    refute html =~ "Surface"
     refute html =~ "CANNOT_DETERMINE"
-    assert html =~ "Surface"
-    assert position_of(html, "Contrast") < position_of(html, "Spread")
-    assert position_of(html, "Defects") < position_of(html, "Surface")
+    assert position_of(html, "Contrast") < position_of(html, "Defects")
+    assert html =~ "Defects"
 
     refute html =~
              "there is no production specification or comparative reference in the image to determine whether bar width reduction or ink spread compensation was applied"
@@ -139,14 +141,41 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
     html = render(view)
 
     assert html =~ "Registry attributes are shown here, with missing fields first."
-    assert html =~ "4/8 available"
+    assert html =~ "4/7 available"
     assert html =~ "Company"
     assert html =~ "Acme Foods Ltd"
 
-    assert position_of(html, "Product image URL") < position_of(html, "Product name")
+    assert position_of(html, "Product category") < position_of(html, "Product name")
     assert position_of(html, "Product category") < position_of(html, "Product description")
     assert position_of(html, "Market") < position_of(html, "Net content")
     assert position_of(html, "Unit of measure") < position_of(html, "Product name")
+  end
+
+  test "wrapped JSON responses are recovered before rendering", %{conn: conn} do
+    Application.put_env(
+      :verify_barcodes,
+      :vision_test_response,
+      "Here is the structured result:\n```json\n#{Jason.encode!(default_response())}\n```"
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    upload =
+      file_input(view, "#upload-form", :barcode_image, [
+        %{
+          name: "barcode.png",
+          content: "fake image bytes",
+          type: "image/png"
+        }
+      ])
+
+    assert render_upload(upload, "barcode.png") =~ "100%"
+    assert render_submit(form(view, "#upload-form", %{"surface_type" => "straight"}))
+
+    html = wait_for_render(view, "Summary")
+
+    assert html =~ "Stub analysis found no visible issues."
+    assert html =~ "Checks"
   end
 
   defp verbose_cannot_determine_response do
@@ -235,6 +264,41 @@ defmodule VerifyBarcodesWeb.BarcodeLive.IndexTest do
         "Some checks pass, but a few criteria cannot be confirmed from the image alone.",
       "checks" => checks
     }
+  end
+
+  defp default_response do
+    %{
+      "overall_verdict" => "PASS",
+      "overall_score" => 98,
+      "summary" => "Stub barcode analysis succeeded.",
+      "gtin" => "",
+      "checks" =>
+        Enum.map(criteria(), fn criterion ->
+          %{
+            "criterion" => criterion,
+            "status" => "PASS",
+            "finding" => "Stub analysis found no visible issues.",
+            "recommendation" => ""
+          }
+        end)
+    }
+  end
+
+  defp criteria do
+    [
+      "Barcode Dimensions",
+      "Colour & Contrast",
+      "Quiet Zones",
+      "Placement Orientation",
+      "Symbology",
+      "Truncation",
+      "Symbol Contrast",
+      "Print Quality",
+      "Human Readable Interpretation (HRI)",
+      "Bar Width Reduction",
+      "Substrate & Print Process",
+      "Defects"
+    ]
   end
 
   defp position_of(html, snippet) do
